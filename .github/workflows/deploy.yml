@@ -73,7 +73,7 @@ jobs:
           SINGLETON_IP: ${{ secrets.SINGLETON_IP }}
         run: |
           for i in {1..30}; do
-            if curl -sf "http://$SINGLETON_IP/" > /dev/null; then
+            if curl -sf "https://kucing.los.my.id" > /dev/null; then
               echo "Health check passed!"
               exit 0
             fi
