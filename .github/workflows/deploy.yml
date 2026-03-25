@@ -120,15 +120,42 @@ jobs:
             echo "AMI state: $STATE (attempt $i/60)"
             if [ "$STATE" = "available" ]; then
               echo "AMI is ready!"
-              exit 0
+              break
             elif [ "$STATE" = "failed" ]; then
               echo "AMI creation failed!"
               exit 1
             fi
             sleep 30
           done
-          echo "Timeout waiting for AMI"
-          exit 1
+
+          # Cleanup old AMIs (keep last 2: current + previous)
+          echo "Cleaning up old AMIs..."
+          KEEP_COUNT=2
+          OLD_AMIS=$(aws ec2 describe-images \
+            --owners self \
+            --filters "Name=tag:Name,Values=aws-grab-synetica-dev-app" \
+            --query 'sort_by(Images, &CreationDate)[:-'"$KEEP_COUNT"'].ImageId' \
+            --output text --region $AWS_REGION)
+
+          if [ -n "$OLD_AMIS" ]; then
+            for OLD_AMI in $OLD_AMIS; do
+              echo "Deregistering old AMI: $OLD_AMI"
+              # Get snapshot IDs before deregistering
+              SNAPSHOTS=$(aws ec2 describe-images --image-ids "$OLD_AMI" --region $AWS_REGION --query 'Images[0].BlockDeviceMappings[*].Ebs.SnapshotId' --output text)
+              # Deregister AMI
+              aws ec2 deregister-image --image-id "$OLD_AMI" --region $AWS_REGION || true
+              # Delete snapshots
+              for SNAP in $SNAPSHOTS; do
+                if [ -n "$SNAP" ]; then
+                  echo "Deleting snapshot: $SNAP"
+                  aws ec2 delete-snapshot --snapshot-id "$SNAP" --region $AWS_REGION || true
+                fi
+              done
+            done
+            echo "AMI cleanup complete!"
+          else
+            echo "No old AMIs to clean up"
+          fi
 
   deploy-asg:
     needs: deploy-singleton
@@ -176,6 +203,27 @@ jobs:
             --region $AWS_REGION
 
           echo "Updated launch template to version $LATEST_VERSION with AMI $AMI_ID"
+
+          # Cleanup old launch template versions (keep last 2: current + previous)
+          echo "Cleaning up old launch template versions..."
+          KEEP_COUNT=2
+          ALL_VERSIONS=$(aws ec2 describe-launch-template-versions \
+            --launch-template-id "$LT_ID" \
+            --query 'sort_by(LaunchTemplateVersions, &VersionNumber)[:-'"$KEEP_COUNT"'].VersionNumber' \
+            --output text --region $AWS_REGION)
+
+          if [ -n "$ALL_VERSIONS" ]; then
+            for VERSION in $ALL_VERSIONS; do
+              echo "Deleting old launch template version: $VERSION"
+              aws ec2 delete-launch-template-versions \
+                --launch-template-id "$LT_ID" \
+                --versions "$VERSION" \
+                --region $AWS_REGION || true
+            done
+            echo "Launch template cleanup complete!"
+          else
+            echo "No old launch template versions to clean up"
+          fi
 
       - name: Get ASG name
         id: get-asg
