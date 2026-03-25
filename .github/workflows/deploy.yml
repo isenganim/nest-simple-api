@@ -98,7 +98,7 @@ jobs:
         id: get-asg
         run: |
           ASG_NAME=$(aws autoscaling describe-auto-scaling-groups \
-            --query 'AutoScalingGroups[?contains(Tags[?Key==`Name`].Value, `asg`)].AutoScalingGroupName' \
+            --query 'AutoScalingGroups[?contains(AutoScalingGroupName, `aws-grab-synetica-dev`)].AutoScalingGroupName' \
             --output text | head -1)
           echo "asg-name=$ASG_NAME" >> $GITHUB_OUTPUT
           echo "ASG: $ASG_NAME"
