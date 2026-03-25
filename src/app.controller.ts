@@ -6,12 +6,12 @@ export class AppController {
   @Public()
   @Get()
   root() {
-    return { status: 'ok', version: '1.0.1' };
+    return { status: 'ok', version: '1.0.2' };
   }
 
   @Public()
   @Get('health')
   health() {
-    return { status: 'ok', version: '1.0.1' };
+    return { status: 'ok', version: '1.0.2' };
   }
 }
