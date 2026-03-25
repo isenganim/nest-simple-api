@@ -1,9 +1,9 @@
 name: Deploy Application
 
 on:
-   push:
-     branches: [main]
-   workflow_dispatch:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 env:
   SERVER_USER: deployer
@@ -17,189 +17,189 @@ jobs:
       singleton-instance-id: ${{ steps.get-instance.outputs.instance-id }}
       ami-id: ${{ steps.create-ami.outputs.ami-id }}
     steps:
-       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-       - name: Setup SSH key
-         env:
-           SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-           SINGLETON_IP: ${{ secrets.SINGLETON_IP }}
-         run: |
-           mkdir -p ~/.ssh
-           echo "$SSH_KEY" > ~/.ssh/id_ed25519
-           chmod 600 ~/.ssh/id_ed25519
-           ssh-keyscan -H "$SINGLETON_IP" >> ~/.ssh/known_hosts 2>/dev/null || true
+      - name: Setup SSH key
+        env:
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SINGLETON_IP: ${{ secrets.SINGLETON_IP }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$SINGLETON_IP" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-       - name: Get singleton instance ID
-         id: get-instance
-         run: |
-           INSTANCE_ID=$(aws ec2 describe-instances \
-             --filters "Name=tag:Name,Values=*main-app-singleton*" \
-                       "Name=instance-state-name,Values=running" \
-             --query 'Reservations[0].Instances[0].InstanceId' \
-             --output text --region $AWS_REGION)
-           echo "instance-id=$INSTANCE_ID" >> $GITHUB_OUTPUT
-           echo "Instance: $INSTANCE_ID"
+      - name: Get singleton instance ID
+        id: get-instance
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=*main-app-singleton*" \
+                      "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].InstanceId' \
+            --output text --region $AWS_REGION)
+          echo "instance-id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Instance: $INSTANCE_ID"
 
-       - name: Sync files via rsync
-         env:
-           SINGLETON_IP: ${{ secrets.SINGLETON_IP }}
-         run: |
-           rsync -avz --delete \
-             --exclude 'node_modules' \
-             --exclude '.git' \
-             --exclude '.env' \
-             ./ $SERVER_USER@$SINGLETON_IP:$APP_PATH/
+      - name: Sync files via rsync
+        env:
+          SINGLETON_IP: ${{ secrets.SINGLETON_IP }}
+        run: |
+          rsync -avz --delete \
+            --exclude 'node_modules' \
+            --exclude '.git' \
+            --exclude '.env' \
+            ./ $SERVER_USER@$SINGLETON_IP:$APP_PATH/
 
-       - name: Install dependencies & build
-         env:
-           SINGLETON_IP: ${{ secrets.SINGLETON_IP }}
-         run: |
-           ssh $SERVER_USER@$SINGLETON_IP << 'EOF'
-             export NVM_DIR="/home/deployer/.nvm"
-             [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-             cd /home/deployer/apps
-             npm install
-             npm run build || true
-           EOF
+      - name: Install dependencies & build
+        env:
+          SINGLETON_IP: ${{ secrets.SINGLETON_IP }}
+        run: |
+          ssh $SERVER_USER@$SINGLETON_IP << 'EOF'
+            export NVM_DIR="/home/deployer/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            cd /home/deployer/apps
+            npm install
+            npm run build || true
+          EOF
 
-       - name: Restart PM2
-         env:
-           SINGLETON_IP: ${{ secrets.SINGLETON_IP }}
-         run: |
-           ssh $SERVER_USER@$SINGLETON_IP << 'EOF'
-             export NVM_DIR="/home/deployer/.nvm"
-             [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-             cd /home/deployer/apps
-             pm2 restart all || pm2 start npm --name "app" -- start
-             pm2 save
-           EOF
+      - name: Restart PM2
+        env:
+          SINGLETON_IP: ${{ secrets.SINGLETON_IP }}
+        run: |
+          ssh $SERVER_USER@$SINGLETON_IP << 'EOF'
+            export NVM_DIR="/home/deployer/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            cd /home/deployer/apps
+            pm2 restart all || pm2 start npm --name "app" -- start
+            pm2 save
+          EOF
 
-       - name: Health check
-         run: |
-           for i in {1..30}; do
-             if curl -sf "https://kucing.los.my.id" > /dev/null; then
-               echo "Health check passed!"
-               exit 0
-             fi
-             echo "Attempt $i failed, retrying..."
-             sleep 10
-           done
-           echo "Health check failed"
-           exit 1
+      - name: Health check
+        run: |
+          for i in {1..30}; do
+            if curl -sf "https://kucing.los.my.id" > /dev/null; then
+              echo "Health check passed!"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying..."
+            sleep 10
+          done
+          echo "Health check failed"
+          exit 1
 
-       - name: Create AMI from instance
-         id: create-ami
-         run: |
-           INSTANCE_ID="${{ steps.get-instance.outputs.instance-id }}"
-           TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-           AMI_NAME="aws-grab-synetica-dev-app-$TIMESTAMP"
+      - name: Create AMI from instance
+        id: create-ami
+        run: |
+          INSTANCE_ID="${{ steps.get-instance.outputs.instance-id }}"
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          AMI_NAME="aws-grab-synetica-dev-app-$TIMESTAMP"
 
-           AMI_ID=$(aws ec2 create-image \
-             --instance-id "$INSTANCE_ID" \
-             --name "$AMI_NAME" \
-             --no-reboot \
-             --description "App deployment $TIMESTAMP" \
-           --tag-specifications 'ResourceType=image,Tags=[{Key=Name,Value=aws-grab-synetica-dev-app},{Key=Project,Value=aws-grab-synetica},{Key=Environment,Value=dev}]' \
-             --query 'ImageId' \
-             --output text --region $AWS_REGION)
+          AMI_ID=$(aws ec2 create-image \
+            --instance-id "$INSTANCE_ID" \
+            --name "$AMI_NAME" \
+            --no-reboot \
+            --description "App deployment $TIMESTAMP" \
+            --tag-specifications 'ResourceType=image,Tags=[{Key=Name,Value=aws-grab-synetica-dev-app},{Key=Project,Value=aws-grab-synetica},{Key=Environment,Value=dev}]' \
+            --query 'ImageId' \
+            --output text --region $AWS_REGION)
 
-           echo "ami-id=$AMI_ID" >> $GITHUB_OUTPUT
-           echo "Created AMI: $AMI_ID"
+          echo "ami-id=$AMI_ID" >> $GITHUB_OUTPUT
+          echo "Created AMI: $AMI_ID"
 
-           # Wait for AMI to be available
-           echo "Waiting for AMI to be available..."
-           aws ec2 wait image-available --image-ids "$AMI_ID" --region $AWS_REGION
-           echo "AMI is ready!"
+          # Wait for AMI to be available
+          echo "Waiting for AMI to be available..."
+          aws ec2 wait image-available --image-ids "$AMI_ID" --region $AWS_REGION
+          echo "AMI is ready!"
 
   deploy-asg:
     needs: deploy-singleton
     runs-on: ["self-hosted", "Linux", "X64"]
     steps:
-       - name: Configure AWS credentials
-         uses: aws-actions/configure-aws-credentials@v4
-         with:
-           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-           aws-region: ap-southeast-1
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-southeast-1
 
-       - name: Get Launch Template ID
-         id: get-lt
-         run: |
-           LT_ID=$(aws ec2 describe-launch-templates \
-             --filters "Name=tag:Name,Values=*app-lt*" \
-             --query 'LaunchTemplates[0].LaunchTemplateId' \
-             --output text --region $AWS_REGION)
-           echo "lt-id=$LT_ID" >> $GITHUB_OUTPUT
-           echo "Launch Template: $LT_ID"
+      - name: Get Launch Template ID
+        id: get-lt
+        run: |
+          LT_ID=$(aws ec2 describe-launch-templates \
+            --filters "Name=tag:Name,Values=*app-lt*" \
+            --query 'LaunchTemplates[0].LaunchTemplateId' \
+            --output text --region $AWS_REGION)
+          echo "lt-id=$LT_ID" >> $GITHUB_OUTPUT
+          echo "Launch Template: $LT_ID"
 
-       - name: Create new launch template version
-         run: |
-           LT_ID="${{ steps.get-lt.outputs.lt-id }}"
-           AMI_ID="${{ needs.deploy-singleton.outputs.ami-id }}"
+      - name: Create new launch template version
+        run: |
+          LT_ID="${{ steps.get-lt.outputs.lt-id }}"
+          AMI_ID="${{ needs.deploy-singleton.outputs.ami-id }}"
 
-           # Create new version with updated AMI
-           aws ec2 create-launch-template-version \
-             --launch-template-id "$LT_ID" \
-             --version-description "Deployment $(date +%Y%m%d-%H%M%S)" \
-             --source-version '$Latest' \
-             --launch-template-data "{\"ImageId\":\"$AMI_ID\"}" \
-             --region $AWS_REGION
+          # Create new version with updated AMI
+          aws ec2 create-launch-template-version \
+            --launch-template-id "$LT_ID" \
+            --version-description "Deployment $(date +%Y%m%d-%H%M%S)" \
+            --source-version '$Latest' \
+            --launch-template-data "{\"ImageId\":\"$AMI_ID\"}" \
+            --region $AWS_REGION
 
-           # Set default version to latest
-           LATEST_VERSION=$(aws ec2 describe-launch-templates \
-             --launch-template-ids "$LT_ID" \
-             --query 'LaunchTemplates[0].LatestVersionNumber' \
-             --output text --region $AWS_REGION)
+          # Set default version to latest
+          LATEST_VERSION=$(aws ec2 describe-launch-templates \
+            --launch-template-ids "$LT_ID" \
+            --query 'LaunchTemplates[0].LatestVersionNumber' \
+            --output text --region $AWS_REGION)
 
-           aws ec2 modify-launch-template \
-             --launch-template-id "$LT_ID" \
-             --default-version "$LATEST_VERSION" \
-             --region $AWS_REGION
+          aws ec2 modify-launch-template \
+            --launch-template-id "$LT_ID" \
+            --default-version "$LATEST_VERSION" \
+            --region $AWS_REGION
 
-           echo "Updated launch template to version $LATEST_VERSION with AMI $AMI_ID"
+          echo "Updated launch template to version $LATEST_VERSION with AMI $AMI_ID"
 
-       - name: Get ASG name
-         id: get-asg
-         run: |
-           ASG_NAME=$(aws autoscaling describe-auto-scaling-groups \
-             --query 'AutoScalingGroups[?contains(AutoScalingGroupName, `aws-grab-synetica-dev`)].AutoScalingGroupName' \
-             --output text | head -1)
-           echo "asg-name=$ASG_NAME" >> $GITHUB_OUTPUT
-           echo "ASG: $ASG_NAME"
+      - name: Get ASG name
+        id: get-asg
+        run: |
+          ASG_NAME=$(aws autoscaling describe-auto-scaling-groups \
+            --query 'AutoScalingGroups[?contains(AutoScalingGroupName, `aws-grab-synetica-dev`)].AutoScalingGroupName' \
+            --output text | head -1)
+          echo "asg-name=$ASG_NAME" >> $GITHUB_OUTPUT
+          echo "ASG: $ASG_NAME"
 
-       - name: Start Instance Refresh
-         run: |
-           ASG_NAME="${{ steps.get-asg.outputs.asg-name }}"
-           aws autoscaling start-instance-refresh \
-             --auto-scaling-group-name "$ASG_NAME" \
-             --strategy Rolling \
-             --preferences '{"MinHealthyPercentage": 90, "InstanceWarmup": 300}'
+      - name: Start Instance Refresh
+        run: |
+          ASG_NAME="${{ steps.get-asg.outputs.asg-name }}"
+          aws autoscaling start-instance-refresh \
+            --auto-scaling-group-name "$ASG_NAME" \
+            --strategy Rolling \
+            --preferences '{"MinHealthyPercentage": 90, "InstanceWarmup": 300}'
 
-       - name: Wait for instance refresh
-         run: |
-           ASG_NAME="${{ steps.get-asg.outputs.asg-name }}"
-           for i in {1..60}; do
-             STATUS=$(aws autoscaling describe-instance-refreshes \
-               --auto-scaling-group-name "$ASG_NAME" \
-               --query 'InstanceRefreshes[0].Status' \
-               --output text --region $AWS_REGION)
-             echo "Refresh: $STATUS"
-             [ "$STATUS" = "Successful" ] && exit 0
-             [ "$STATUS" = "Failed" ] && exit 1
-             sleep 30
-           done
-           echo "Timeout waiting for refresh"
-           exit 1
+      - name: Wait for instance refresh
+        run: |
+          ASG_NAME="${{ steps.get-asg.outputs.asg-name }}"
+          for i in {1..60}; do
+            STATUS=$(aws autoscaling describe-instance-refreshes \
+              --auto-scaling-group-name "$ASG_NAME" \
+              --query 'InstanceRefreshes[0].Status' \
+              --output text --region $AWS_REGION)
+            echo "Refresh: $STATUS"
+            [ "$STATUS" = "Successful" ] && exit 0
+            [ "$STATUS" = "Failed" ] && exit 1
+            sleep 30
+          done
+          echo "Timeout waiting for refresh"
+          exit 1
 
-       - name: Final health check
-         run: |
-           for i in {1..30}; do
-             if curl -sf "https://kucing.los.my.id" > /dev/null; then
-               echo "Health check passed!"
-               exit 0
-             fi
-             echo "Attempt $i failed, retrying..."
-             sleep 10
-           done
-           echo "Health check failed"
-           exit 1
+      - name: Final health check
+        run: |
+          for i in {1..30}; do
+            if curl -sf "https://kucing.los.my.id" > /dev/null; then
+              echo "Health check passed!"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying..."
+            sleep 10
+          done
+          echo "Health check failed"
+          exit 1
