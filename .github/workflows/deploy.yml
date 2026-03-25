@@ -113,10 +113,22 @@ jobs:
           echo "ami-id=$AMI_ID" >> $GITHUB_OUTPUT
           echo "Created AMI: $AMI_ID"
 
-          # Wait for AMI to be available
+          # Wait for AMI to be available (can take 10-30 minutes)
           echo "Waiting for AMI to be available..."
-          aws ec2 wait image-available --image-ids "$AMI_ID" --region $AWS_REGION
-          echo "AMI is ready!"
+          for i in {1..60}; do
+            STATE=$(aws ec2 describe-images --image-ids "$AMI_ID" --region $AWS_REGION --query 'Images[0].State' --output text)
+            echo "AMI state: $STATE (attempt $i/60)"
+            if [ "$STATE" = "available" ]; then
+              echo "AMI is ready!"
+              exit 0
+            elif [ "$STATE" = "failed" ]; then
+              echo "AMI creation failed!"
+              exit 1
+            fi
+            sleep 30
+          done
+          echo "Timeout waiting for AMI"
+          exit 1
 
   deploy-asg:
     needs: deploy-singleton
